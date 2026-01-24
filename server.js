@@ -69,7 +69,7 @@ function startRound(){
   if(roundActive || totalBank===0) return;
   roundActive = true;
 
-  broadcast({type:"round_start", time:6});
+  broadcast({ type:"round_end", winnerId, winnerName, winAmount });
 
   setTimeout(()=>{
     // weighted random
