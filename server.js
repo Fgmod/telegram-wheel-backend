@@ -9,53 +9,66 @@ const wss = new WebSocketServer({ server });
 const START_BALANCE = 1000;
 const BOT_COUNT = 3;
 
-let players = {};   // id -> player object
+let players = {};   // id -> player
 let totalBank = 0;
 let roundActive = false;
 
-// ---- создаём ботов один раз ----
+// --------------------
+// Создаём ботов
+// --------------------
 function createBots(){
   for(let i=1;i<=BOT_COUNT;i++){
     const id = "bot_"+i;
     players[id] = {
       id,
       name: "BOT_"+i,
-      bet:0,
+      bet: 0,
       balance: START_BALANCE,
-      isBot:true,
-      ws:null
+      isBot: true,
+      ws: null
     };
   }
 }
 createBots();
 
-// ---- utils ----
+// --------------------
+// Вспомогательные функции
+// --------------------
 function broadcast(data){
-  wss.clients.forEach(c=>{
-    c.send(JSON.stringify(data));
+  const msg = JSON.stringify(data);
+  wss.clients.forEach(client=>{
+    if(client.readyState === 1){
+      client.send(msg);
+    }
   });
 }
 
 function broadcastState(){
+  const plist = Object.values(players).map(p=>({
+    id: p.id,
+    name: p.name,
+    bet: p.bet,
+    balance: p.balance,
+    chance: totalBank > 0 
+      ? ((p.bet / totalBank) * 100).toFixed(1) 
+      : "0.0"
+  }));
+
   broadcast({
-    type:"state",
-    players: Object.values(players).map(p=>({
-      id:p.id,
-      name:p.name,
-      bet:p.bet,
-      balance:p.balance,
-      chance: totalBank>0 ? ((p.bet/totalBank)*100).toFixed(1) : "0.0"
-    })),
+    type: "state",
+    players: plist,
     totalBank
   });
 }
 
-// ---- боты делают ставки ----
+// --------------------
+// Боты делают ставки
+// --------------------
 function botMakeBets(){
   Object.values(players).forEach(p=>{
-    if(p.isBot && p.balance>0){
+    if(p.isBot && p.balance > 0){
       const amount = Math.floor(Math.random()*200)+50;
-      if(p.balance>=amount){
+      if(p.balance >= amount){
         p.balance -= amount;
         p.bet += amount;
         totalBank += amount;
@@ -64,21 +77,27 @@ function botMakeBets(){
   });
 }
 
-// ---- запуск раунда ----
+// --------------------
+// Запуск раунда
+// --------------------
 function startRound(){
-  if(roundActive || totalBank===0) return;
+  if(roundActive || totalBank === 0) return;
+
   roundActive = true;
 
   broadcast({ type:"round_start", time:6 });
 
   setTimeout(()=>{
-    // weighted random
+    // выбор победителя по весу ставки
     let rand = Math.random() * totalBank;
-    let winner;
+    let winner = null;
 
     for(const p of Object.values(players)){
       rand -= p.bet;
-      if(rand<=0){ winner = p; break; }
+      if(rand <= 0){
+        winner = p;
+        break;
+      }
     }
 
     if(winner){
@@ -92,32 +111,37 @@ function startRound(){
       winAmount: totalBank
     });
 
-    // сброс ставок
-    Object.values(players).forEach(p=> p.bet = 0);
+    // сброс раунда
+    Object.values(players).forEach(p=>p.bet = 0);
     totalBank = 0;
     roundActive = false;
+
     broadcastState();
 
   },6000);
 }
 
-// ---- websocket ----
+// --------------------
+// WebSocket
+// --------------------
 wss.on("connection", ws=>{
-  ws.on("message", msg=>{
-    const data = JSON.parse(msg);
 
-    // подключение пользователя
-    if(data.type==="join"){
-      // если игрок уже есть — просто привязываем сокет
+  ws.on("message", message=>{
+    let data;
+    try { data = JSON.parse(message); }
+    catch(e){ return; }
+
+    // подключение игрока
+    if(data.type === "join"){
       if(players[data.id]){
         players[data.id].ws = ws;
       } else {
         players[data.id] = {
-          id:data.id,
-          name:data.name,
-          bet:0,
+          id: data.id,
+          name: data.name || "Player",
+          bet: 0,
           balance: START_BALANCE,
-          isBot:false,
+          isBot: false,
           ws
         };
       }
@@ -125,10 +149,10 @@ wss.on("connection", ws=>{
     }
 
     // ставка
-    if(data.type==="bet" && !roundActive){
+    if(data.type === "bet" && !roundActive){
       const p = players[data.id];
       const amount = Number(data.amount);
-      if(amount>0 && p.balance>=amount){
+      if(p && amount > 0 && p.balance >= amount){
         p.balance -= amount;
         p.bet += amount;
         totalBank += amount;
@@ -136,28 +160,33 @@ wss.on("connection", ws=>{
       }
     }
 
-    // старт
-    if(data.type==="start" && !roundActive){
+    // старт раунда
+    if(data.type === "start" && !roundActive){
       botMakeBets();
       broadcastState();
       startRound();
     }
-
-    // запрос возврата в лобби
-    if(data.type==="back_to_lobby"){
-      ws.send(JSON.stringify({type:"back_ack"}));
-    }
   });
 
   ws.on("close", ()=>{
+    // отвязываем сокет, но игрока оставляем (для сохранения баланса)
     for(const id in players){
       if(players[id].ws === ws){
         players[id].ws = null;
       }
     }
-    broadcastState();
   });
 });
 
+// --------------------
+// HTTP (не обязателен, но полезен для Render)
+ // --------------------
+app.get("/", (req,res)=>{
+  res.send("SPINS backend running");
+});
+
+// --------------------
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, ()=>console.log("Backend started"));
+server.listen(PORT, ()=>{
+  console.log("SPINS backend started on port", PORT);
+});
