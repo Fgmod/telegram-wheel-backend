@@ -2,10 +2,19 @@ import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+
+// Путь к файлу users.json
+const USERS_FILE = path.join(__dirname, 'users.json');
 
 // Настройки CORS
 app.use(cors({
@@ -19,7 +28,32 @@ app.use(express.json());
 const START_BALANCE = 1000;
 const ADMIN_IDS = ["1743237033"]; // Ваш Telegram ID
 
-// Хранилища данных
+// Функции для работы с файлом пользователей
+function loadUsers() {
+    try {
+        if (fs.existsSync(USERS_FILE)) {
+            const data = fs.readFileSync(USERS_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (error) {
+        console.error('Error loading users:', error);
+    }
+    return { users: {}, lastUpdated: new Date().toISOString() };
+}
+
+function saveUsers(data) {
+    try {
+        data.lastUpdated = new Date().toISOString();
+        fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch (error) {
+        console.error('Error saving users:', error);
+        return false;
+    }
+}
+
+// Загружаем пользователей при старте
+let usersData = loadUsers();
 let players = {};
 let lobbies = {
   bots: { players: [], ready: true, bets: {} },
@@ -28,7 +62,7 @@ let lobbies = {
 let roundActive = false;
 let gameMode = "bots";
 
-// Статистика
+// Статистика игры
 let gameStats = {
   totalRounds: 0,
   totalWins: 0,
@@ -36,6 +70,80 @@ let gameStats = {
   totalBets: 0,
   playerStats: {}
 };
+
+// Инициализация или обновление статистики игрока
+function initPlayerStats(userId, userName) {
+    if (!usersData.users[userId]) {
+        usersData.users[userId] = {
+            id: userId,
+            name: userName,
+            balance: START_BALANCE,
+            totalWins: 0,
+            totalLosses: 0,
+            totalBets: 0,
+            totalWon: 0,
+            gamesPlayed: 0,
+            joinDate: new Date().toISOString(),
+            lastActive: new Date().toISOString(),
+            emoji: getRandomEmoji()
+        };
+        saveUsers(usersData);
+    } else {
+        // Обновляем время последней активности
+        usersData.users[userId].lastActive = new Date().toISOString();
+        saveUsers(usersData);
+    }
+    
+    // Инициализируем статистику для текущей сессии
+    if (!gameStats.playerStats[userId]) {
+        gameStats.playerStats[userId] = { 
+            wins: usersData.users[userId].totalWins || 0, 
+            losses: usersData.users[userId].totalLosses || 0, 
+            totalBet: usersData.users[userId].totalBets || 0,
+            totalWon: usersData.users[userId].totalWon || 0 
+        };
+    }
+}
+
+// Функция для получения случайного эмодзи
+function getRandomEmoji() {
+    const emojis = ['👤', '🎮', '💎', '🚀', '⭐', '👽', '🦄', '🐉', '🐲', '🦁', '🐯', '🐶', '🐱', '🐼', '🦊', '🐻', '🐨', '🐵', '🦍'];
+    return emojis[Math.floor(Math.random() * emojis.length)];
+}
+
+// Обновление статистики игрока после игры
+function updatePlayerStats(userId, winAmount, betAmount, won) {
+    if (!usersData.users[userId]) return;
+    
+    const user = usersData.users[userId];
+    
+    user.gamesPlayed = (user.gamesPlayed || 0) + 1;
+    user.totalBets = (user.totalBets || 0) + betAmount;
+    user.lastActive = new Date().toISOString();
+    
+    if (won) {
+        user.totalWins = (user.totalWins || 0) + 1;
+        user.totalWon = (user.totalWon || 0) + winAmount;
+        user.balance = (user.balance || START_BALANCE) + winAmount;
+    } else {
+        user.totalLosses = (user.totalLosses || 0) + 1;
+        user.balance = Math.max(0, (user.balance || START_BALANCE) - betAmount);
+    }
+    
+    // Сохраняем в файл
+    saveUsers(usersData);
+    
+    // Обновляем статистику текущей сессии
+    if (gameStats.playerStats[userId]) {
+        if (won) {
+            gameStats.playerStats[userId].wins++;
+            gameStats.playerStats[userId].totalWon += winAmount;
+        } else {
+            gameStats.playerStats[userId].losses++;
+        }
+        gameStats.playerStats[userId].totalBet += betAmount;
+    }
+}
 
 // Создание ботов
 function createBot(id) {
@@ -48,7 +156,8 @@ function createBot(id) {
     ws: null,
     chanceMultiplier: 0.8 + Math.random() * 0.4,
     lobbyId: "bots",
-    ready: true
+    ready: true,
+    emoji: "🤖"
   };
 }
 
@@ -82,6 +191,8 @@ function broadcastState(lobbyId) {
     type: "state",
     players: lobbyPlayers.map(p => {
       const chance = lobbyBank > 0 ? ((p.bet / lobbyBank) * 100 * (p.chanceMultiplier || 1)).toFixed(1) : "0.0";
+      const userData = usersData.users[p.id];
+      
       return {
         id: p.id,
         name: p.name,
@@ -91,7 +202,8 @@ function broadcastState(lobbyId) {
         isBot: p.isBot,
         isOnline: p.ws !== null,
         ready: p.ready || false,
-        lobbyId: p.lobbyId
+        lobbyId: p.lobbyId,
+        emoji: userData?.emoji || (p.isBot ? "🤖" : "👤")
       };
     }),
     totalBank: lobbyBank,
@@ -206,10 +318,13 @@ function startRound(lobbyId) {
   
   roundActive = true;
   
+  // Подготавливаем сектора с эмодзи
+  const sectors = calculateSectors(lobbyPlayers);
+  
   broadcastToLobby(lobbyId, { 
     type: "round_start", 
     time: 6,
-    sectors: calculateSectors(lobbyPlayers)
+    sectors: sectors
   });
   
   setTimeout(() => {
@@ -239,16 +354,7 @@ function startRound(lobbyId) {
       
       if (!winner.isBot) {
         gameStats.totalWins++;
-        if (!gameStats.playerStats[winner.id]) {
-          gameStats.playerStats[winner.id] = { 
-            wins: 0, 
-            losses: 0, 
-            totalBet: 0,
-            totalWon: 0 
-          };
-        }
-        gameStats.playerStats[winner.id].wins++;
-        gameStats.playerStats[winner.id].totalWon += lobbyBank;
+        updatePlayerStats(winner.id, lobbyBank, winner.bet, true);
       }
     }
     
@@ -256,16 +362,7 @@ function startRound(lobbyId) {
     lobbyPlayers.forEach(p => {
       if (p !== winner && !p.isBot) {
         gameStats.totalLosses++;
-        if (!gameStats.playerStats[p.id]) {
-          gameStats.playerStats[p.id] = { 
-            wins: 0, 
-            losses: 0, 
-            totalBet: 0,
-            totalWon: 0 
-          };
-        }
-        gameStats.playerStats[p.id].losses++;
-        gameStats.playerStats[p.id].totalBet += p.bet;
+        updatePlayerStats(p.id, 0, p.bet, false);
       }
     });
     
@@ -280,10 +377,14 @@ function startRound(lobbyId) {
       lobby.readyCount = 0;
     }
     
+    // Получаем эмодзи победителя
+    const winnerEmoji = usersData.users[winner?.id]?.emoji || (winner?.isBot ? "🤖" : "👤");
+    
     broadcastToLobby(lobbyId, {
       type: "round_end",
       winnerId: winner?.id,
       winnerName: winner?.name,
+      winnerEmoji: winnerEmoji,
       winAmount: lobbyBank,
       stats: gameStats
     });
@@ -297,14 +398,14 @@ function startRound(lobbyId) {
   }, 6000);
 }
 
-// Расчет секторов колеса
+// Расчет секторов колеса с эмодзи
 function calculateSectors(lobbyPlayers) {
   const playersWithBets = lobbyPlayers.filter(p => p.bet > 0);
   const totalBet = playersWithBets.reduce((sum, p) => sum + p.bet, 0);
   
   if (playersWithBets.length === 0) {
     return [
-      { name: "Пусто", color: "#666", size: 100 }
+      { name: "Пусто", color: "#666", size: 100, emoji: "🎲" }
     ];
   }
   
@@ -314,11 +415,14 @@ function calculateSectors(lobbyPlayers) {
   playersWithBets.forEach((player, index) => {
     const percentage = (player.bet / totalBet) * 100;
     if (percentage > 0) {
+      const userData = usersData.users[player.id];
       sectors.push({
         name: player.name.substring(0, 10),
         color: colors[index % colors.length],
         size: percentage,
-        playerId: player.id
+        playerId: player.id,
+        isBot: player.isBot,
+        emoji: userData?.emoji || (player.isBot ? "🤖" : "👤")
       });
     }
   });
@@ -336,6 +440,13 @@ function adminCommand(command, data, adminId) {
     case "add_balance":
       if (players[data.userId]) {
         players[data.userId].balance += data.amount;
+        
+        // Обновляем в файле
+        if (usersData.users[data.userId]) {
+          usersData.users[data.userId].balance = players[data.userId].balance;
+          saveUsers(usersData);
+        }
+        
         broadcastState(players[data.userId].lobbyId);
         return { 
           success: true, 
@@ -348,6 +459,7 @@ function adminCommand(command, data, adminId) {
       return { 
         success: true, 
         stats: gameStats,
+        users: usersData,
         players: Object.values(players).filter(p => !p.isBot).map(p => ({
           id: p.id,
           name: p.name,
@@ -356,7 +468,8 @@ function adminCommand(command, data, adminId) {
           wins: gameStats.playerStats[p.id]?.wins || 0,
           losses: gameStats.playerStats[p.id]?.losses || 0,
           totalBet: gameStats.playerStats[p.id]?.totalBet || 0,
-          totalWon: gameStats.playerStats[p.id]?.totalWon || 0
+          totalWon: gameStats.playerStats[p.id]?.totalWon || 0,
+          emoji: usersData.users[p.id]?.emoji || "👤"
         }))
       };
       
@@ -365,13 +478,26 @@ function adminCommand(command, data, adminId) {
         if (!p.isBot) {
           p.balance = START_BALANCE;
           p.bet = 0;
+          
+          // Обновляем в файле
+          if (usersData.users[p.id]) {
+            usersData.users[p.id].balance = START_BALANCE;
+          }
         }
       });
+      saveUsers(usersData);
       return { success: true };
       
     case "set_balance":
       if (players[data.userId]) {
         players[data.userId].balance = data.amount;
+        
+        // Обновляем в файле
+        if (usersData.users[data.userId]) {
+          usersData.users[data.userId].balance = data.amount;
+          saveUsers(usersData);
+        }
+        
         broadcastState(players[data.userId].lobbyId);
         return { 
           success: true, 
@@ -388,6 +514,28 @@ function adminCommand(command, data, adminId) {
           lobby.players = lobby.players.filter(id => id !== data.userId);
         }
         delete players[data.userId];
+        return { success: true };
+      }
+      break;
+      
+    case "reset_user_stats":
+      if (usersData.users[data.userId]) {
+        usersData.users[data.userId] = {
+          ...usersData.users[data.userId],
+          balance: START_BALANCE,
+          totalWins: 0,
+          totalLosses: 0,
+          totalBets: 0,
+          totalWon: 0,
+          gamesPlayed: 0
+        };
+        saveUsers(usersData);
+        
+        if (players[data.userId]) {
+          players[data.userId].balance = START_BALANCE;
+          broadcastState(players[data.userId].lobbyId);
+        }
+        
         return { success: true };
       }
       break;
@@ -408,18 +556,22 @@ wss.on("connection", (ws, req) => {
         const isAdmin = ADMIN_IDS.includes(data.id.toString());
         const isNewPlayer = !players[data.id];
         
+        // Инициализируем или загружаем статистику игрока
+        initPlayerStats(data.id, data.name || `Player_${data.id.toString().slice(-4)}`);
+        
         if (isNewPlayer) {
           players[data.id] = {
             id: data.id,
             name: data.name || `Player_${data.id.toString().slice(-4)}`,
             bet: 0,
-            balance: START_BALANCE,
+            balance: usersData.users[data.id]?.balance || START_BALANCE,
             isBot: false,
             ws,
             lobbyId: "bots",
             chanceMultiplier: 0.9 + Math.random() * 0.2,
             isAdmin: isAdmin,
-            ready: false
+            ready: false,
+            emoji: usersData.users[data.id]?.emoji || getRandomEmoji()
           };
           
           lobbies.bots.players.push(data.id);
@@ -434,14 +586,28 @@ wss.on("connection", (ws, req) => {
           }
         } else {
           players[data.id].ws = ws;
+          // Обновляем баланс из сохраненных данных
+          players[data.id].balance = usersData.users[data.id]?.balance || START_BALANCE;
         }
+        
+        // Отправляем полную статистику игрока
+        const userStats = usersData.users[data.id] || {};
         
         ws.send(JSON.stringify({
           type: "init",
           balance: players[data.id].balance,
           isAdmin: players[data.id].isAdmin,
           gameMode: players[data.id].lobbyId,
-          playerId: data.id
+          playerId: data.id,
+          playerEmoji: players[data.id].emoji,
+          stats: {
+            totalWins: userStats.totalWins || 0,
+            totalLosses: userStats.totalLosses || 0,
+            totalBets: userStats.totalBets || 0,
+            totalWon: userStats.totalWon || 0,
+            gamesPlayed: userStats.gamesPlayed || 0,
+            joinDate: userStats.joinDate || new Date().toISOString()
+          }
         }));
         
         broadcastState(players[data.id].lobbyId);
@@ -494,6 +660,15 @@ wss.on("connection", (ws, req) => {
           player.balance -= amount;
           player.bet = amount;
           gameStats.totalBets += amount;
+          
+          if (!gameStats.playerStats[player.id]) {
+            gameStats.playerStats[player.id] = { 
+              wins: 0, 
+              losses: 0, 
+              totalBet: 0,
+              totalWon: 0 
+            };
+          }
           gameStats.playerStats[player.id].totalBet += amount;
           
           // Если режим с ботами, боты тоже ставят
@@ -618,13 +793,96 @@ app.get("/api/info", (req, res) => {
     players: Object.values(players).filter(p => !p.isBot && p.ws).length,
     bots: Object.values(players).filter(p => p.isBot).length,
     totalRounds: gameStats.totalRounds,
+    totalUsers: Object.keys(usersData.users).length,
     uptime: process.uptime()
+  });
+});
+
+// Получение статистики пользователя
+app.get("/api/user/:userId", (req, res) => {
+  const userId = req.params.userId;
+  
+  if (usersData.users[userId]) {
+    res.json({
+      success: true,
+      user: usersData.users[userId]
+    });
+  } else {
+    res.json({
+      success: false,
+      error: "User not found"
+    });
+  }
+});
+
+// Сброс статистики пользователя (только для админа)
+app.post("/api/reset-stats/:userId", (req, res) => {
+  const userId = req.params.userId;
+  const adminId = req.query.adminId;
+  
+  if (!adminId || !ADMIN_IDS.includes(adminId.toString())) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  
+  if (usersData.users[userId]) {
+    usersData.users[userId] = {
+      ...usersData.users[userId],
+      balance: START_BALANCE,
+      totalWins: 0,
+      totalLosses: 0,
+      totalBets: 0,
+      totalWon: 0,
+      gamesPlayed: 0
+    };
+    
+    saveUsers(usersData);
+    
+    res.json({
+      success: true,
+      message: "User stats reset"
+    });
+  } else {
+    res.json({
+      success: false,
+      error: "User not found"
+    });
+  }
+});
+
+// Получение всех пользователей (только для админа)
+app.get("/api/all-users", (req, res) => {
+  const adminId = req.query.adminId;
+  
+  if (!adminId || !ADMIN_IDS.includes(adminId.toString())) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  
+  res.json({
+    success: true,
+    totalUsers: Object.keys(usersData.users).length,
+    users: Object.values(usersData.users).map(user => ({
+      id: user.id,
+      name: user.name,
+      balance: user.balance,
+      totalWins: user.totalWins,
+      totalLosses: user.totalLosses,
+      totalBets: user.totalBets,
+      totalWon: user.totalWon,
+      gamesPlayed: user.gamesPlayed,
+      joinDate: user.joinDate,
+      lastActive: user.lastActive,
+      emoji: user.emoji
+    }))
   });
 });
 
 // Проверка работоспособности
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    usersCount: Object.keys(usersData.users).length
+  });
 });
 
 // Обслуживание статичного админ-интерфейса
@@ -640,9 +898,12 @@ app.get("/admin", (req, res) => {
     <head>
         <title>Admin Panel - Wheel Game</title>
         <style>
-            body { font-family: Arial; padding: 20px; }
+            body { font-family: Arial; padding: 20px; background: #0a0c14; color: white; }
             .container { max-width: 800px; margin: 0 auto; }
-            .stat { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+            .stat { background: #1a1f2e; padding: 15px; margin: 10px 0; border-radius: 5px; border: 1px solid #2fff9d33; }
+            h1 { color: #2fff9d; }
+            .user-list { margin-top: 20px; }
+            .user-item { padding: 10px; border-bottom: 1px solid #2fff9d33; }
         </style>
     </head>
     <body>
@@ -651,8 +912,20 @@ app.get("/admin", (req, res) => {
             <p>Status: <strong>Online</strong></p>
             <p>Админ ID: ${adminId}</p>
             <div class="stat">
-                <h3>Для управления используйте команды в боте:</h3>
-                <p>Админ-панель доступна только через Telegram бота</p>
+                <h3>Статистика сервера:</h3>
+                <p>Всего пользователей: ${Object.keys(usersData.users).length}</p>
+                <p>Активных игроков: ${Object.values(players).filter(p => !p.isBot && p.ws).length}</p>
+                <p>Всего раундов: ${gameStats.totalRounds}</p>
+                <p>Дата обновления: ${usersData.lastUpdated || 'Нет данных'}</p>
+            </div>
+            <div class="user-list">
+                <h3>Последние пользователи:</h3>
+                ${Object.values(usersData.users).slice(-10).reverse().map(user => `
+                    <div class="user-item">
+                        ${user.emoji || '👤'} ${user.name} (${user.id}) - Баланс: ${user.balance} 
+                        - Игр: ${user.gamesPlayed || 0}
+                    </div>
+                `).join('')}
             </div>
         </div>
     </body>
@@ -665,8 +938,10 @@ app.get("/", (req, res) => {
   res.json({
     name: "Telegram Wheel Game Backend",
     version: "1.0.0",
-    endpoints: ["/health", "/api/info"],
-    websocket: "wss://" + req.get('host')
+    endpoints: ["/health", "/api/info", "/api/user/:userId"],
+    websocket: "wss://" + req.get('host'),
+    totalUsers: Object.keys(usersData.users).length,
+    dataFile: "users.json"
   });
 });
 
@@ -681,9 +956,12 @@ server.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🌐 WebSocket: ws://localhost:${PORT}`);
   console.log(`👑 Admin ID: 1743237033`);
+  console.log(`📁 Users file: ${USERS_FILE}`);
+  console.log(`👥 Total registered users: ${Object.keys(usersData.users).length}`);
   
   if (process.env.NODE_ENV !== 'production') {
     console.log("\n⚡ Development mode");
-    console.log("👥 Bots created:", Object.values(players).filter(p => p.isBot).length);
+    console.log("🤖 Bots created:", Object.values(players).filter(p => p.isBot).length);
+    console.log("💾 Data will be saved to:", USERS_FILE);
   }
 });
