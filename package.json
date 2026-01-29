@@ -2,7 +2,7 @@
   "name": "telegram-wheel-backend",
   "version": "1.0.0",
   "type": "module",
-  "description": "Backend для Telegram Wheel Game",
+  "description": "Backend для Telegram Spins",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
