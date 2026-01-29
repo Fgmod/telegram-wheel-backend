@@ -13,7 +13,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Путь к файлу users.json
+// путь к файлу users.json
 const USERS_FILE = path.join(__dirname, 'users.json');
 
 // Настройки CORS
@@ -28,7 +28,7 @@ app.use(express.json());
 const START_BALANCE = 1000;
 const ADMIN_IDS = ["1743237033"]; // Ваш Telegram ID
 
-// Функции для работы с файлом пользователей
+// Функции для работы с файлом пользователей (в разработке)
 function loadUsers() {
     try {
         if (fs.existsSync(USERS_FILE)) {
@@ -52,7 +52,7 @@ function saveUsers(data) {
     }
 }
 
-// Загружаем пользователей при старте
+// Загрузка пользователей при старте
 let usersData = loadUsers();
 let players = {};
 let lobbies = {
@@ -71,7 +71,7 @@ let gameStats = {
   playerStats: {}
 };
 
-// Инициализация или обновление статистики игрока
+// Инициализация или обновление статистики игрока 
 function initPlayerStats(userId, userName) {
     if (!usersData.users[userId]) {
         usersData.users[userId] = {
@@ -89,12 +89,12 @@ function initPlayerStats(userId, userName) {
         };
         saveUsers(usersData);
     } else {
-        // Обновляем время последней активности
+        // Обновление времени последней активности
         usersData.users[userId].lastActive = new Date().toISOString();
         saveUsers(usersData);
     }
     
-    // Инициализируем статистику для текущей сессии
+    // Инициализация статистики для текущей сессии
     if (!gameStats.playerStats[userId]) {
         gameStats.playerStats[userId] = { 
             wins: usersData.users[userId].totalWins || 0, 
@@ -184,7 +184,7 @@ function broadcastState(lobbyId) {
   const lobby = lobbies[lobbyId];
   const lobbyPlayers = lobby.players.map(id => players[id]).filter(p => p);
   
-  // Рассчитываем общий банк для лобби
+  // Рассчитывание общего банка для лобби
   const lobbyBank = lobbyPlayers.reduce((sum, p) => sum + (p.bet || 0), 0);
   
   const data = {
@@ -263,13 +263,13 @@ function checkPvPReady() {
   lobbies.pvp.ready = readyPlayers >= 2 && readyPlayers === totalPlayers;
   
   if (lobbies.pvp.ready) {
-    // Уведомляем всех о готовности
+    // Уведомление всех о готовности
     broadcastToLobby("pvp", {
       type: "lobby_ready",
       message: "Все игроки готовы! Раунд начинается через 5 секунд..."
     });
     
-    // Автоматически запускаем раунд через 5 секунд
+    // Автоматический запуск раунда через 5 секунд
     setTimeout(() => {
       if (lobbies.pvp.ready && !roundActive) {
         startRound("pvp");
@@ -318,7 +318,7 @@ function startRound(lobbyId) {
   
   roundActive = true;
   
-  // Подготавливаем сектора с эмодзи
+  // Подготовка сектора с эмодзи
   const sectors = calculateSectors(lobbyPlayers);
   
   broadcastToLobby(lobbyId, { 
@@ -368,7 +368,7 @@ function startRound(lobbyId) {
     
     gameStats.totalRounds++;
     
-    // Сбрасываем готовность для PvP
+    // Сбрасывание готовности для PvP
     if (lobbyId === "pvp") {
       lobbyPlayers.forEach(p => {
         if (!p.isBot) p.ready = false;
@@ -377,7 +377,7 @@ function startRound(lobbyId) {
       lobby.readyCount = 0;
     }
     
-    // Получаем эмодзи победителя
+    // Получение эмодзи победителя
     const winnerEmoji = usersData.users[winner?.id]?.emoji || (winner?.isBot ? "🤖" : "👤");
     
     broadcastToLobby(lobbyId, {
@@ -441,7 +441,7 @@ function adminCommand(command, data, adminId) {
       if (players[data.userId]) {
         players[data.userId].balance += data.amount;
         
-        // Обновляем в файле
+        // Обновление в файле (в разработке) 
         if (usersData.users[data.userId]) {
           usersData.users[data.userId].balance = players[data.userId].balance;
           saveUsers(usersData);
@@ -479,7 +479,7 @@ function adminCommand(command, data, adminId) {
           p.balance = START_BALANCE;
           p.bet = 0;
           
-          // Обновляем в файле
+          // Обновление в файле 
           if (usersData.users[p.id]) {
             usersData.users[p.id].balance = START_BALANCE;
           }
@@ -492,7 +492,7 @@ function adminCommand(command, data, adminId) {
       if (players[data.userId]) {
         players[data.userId].balance = data.amount;
         
-        // Обновляем в файле
+        // Обновление в файле
         if (usersData.users[data.userId]) {
           usersData.users[data.userId].balance = data.amount;
           saveUsers(usersData);
@@ -508,7 +508,7 @@ function adminCommand(command, data, adminId) {
       
     case "kick_player":
       if (players[data.userId]) {
-        // Удаляем из лобби
+        // Удаление из лобби
         const lobby = lobbies[players[data.userId].lobbyId];
         if (lobby) {
           lobby.players = lobby.players.filter(id => id !== data.userId);
@@ -556,7 +556,7 @@ wss.on("connection", (ws, req) => {
         const isAdmin = ADMIN_IDS.includes(data.id.toString());
         const isNewPlayer = !players[data.id];
         
-        // Инициализируем или загружаем статистику игрока
+        // Инициализация или загрузка статистики игрока
         initPlayerStats(data.id, data.name || `Player_${data.id.toString().slice(-4)}`);
         
         if (isNewPlayer) {
@@ -586,11 +586,11 @@ wss.on("connection", (ws, req) => {
           }
         } else {
           players[data.id].ws = ws;
-          // Обновляем баланс из сохраненных данных
+          // Обновление баланса из сохраненных данных
           players[data.id].balance = usersData.users[data.id]?.balance || START_BALANCE;
         }
         
-        // Отправляем полную статистику игрока
+        // Отправление полной статистики игрока
         const userStats = usersData.users[data.id] || {};
         
         ws.send(JSON.stringify({
@@ -617,13 +617,13 @@ wss.on("connection", (ws, req) => {
       if (data.type === "select_mode") {
         const player = players[data.id];
         if (player) {
-          // Удаляем из старого лобби
+          // Удаление из старого лобби
           const oldLobby = lobbies[player.lobbyId];
           if (oldLobby) {
             oldLobby.players = oldLobby.players.filter(id => id !== player.id);
           }
           
-          // Добавляем в новое лобби
+          // Добавление в новое лобби
           player.lobbyId = data.mode;
           lobbies[data.mode].players.push(player.id);
           player.ready = false;
@@ -644,7 +644,7 @@ wss.on("connection", (ws, req) => {
         if (player && player.lobbyId === "pvp") {
           player.ready = !player.ready;
           
-          // Проверяем готовность лобби
+          // Проверка готовности лобби
           checkPvPReady();
           
           broadcastState("pvp");
@@ -727,7 +727,7 @@ wss.on("connection", (ws, req) => {
         if (player) {
           console.log(`📩 Support message from ${player.name} (${player.id}): ${data.message}`);
           
-          // Уведомление только администраторам
+          // Уведомление только администраторам (по id)
           Object.values(players).forEach(p => {
             if (p.isAdmin && p.ws) {
               p.ws.send(JSON.stringify({
@@ -776,7 +776,7 @@ wss.on("connection", (ws, req) => {
 app.post("/admin/api", (req, res) => {
   const { token, command, data } = req.body;
   
-  // Проверка через Telegram ID из параметра
+  // Проверка через id из параметра
   const adminId = req.query.adminId || data?.adminId;
   if (!adminId || !ADMIN_IDS.includes(adminId.toString())) {
     return res.status(403).json({ error: "Access denied" });
@@ -896,7 +896,7 @@ app.get("/admin", (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Admin Panel - Wheel Game</title>
+        <title>Admin Panel - Spins</title>
         <style>
             body { font-family: Arial; padding: 20px; background: #0a0c14; color: white; }
             .container { max-width: 800px; margin: 0 auto; }
@@ -908,7 +908,7 @@ app.get("/admin", (req, res) => {
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Wheel Game Backend</h1>
+            <h1>🚀 Spins Backend</h1>
             <p>Status: <strong>Online</strong></p>
             <p>Админ ID: ${adminId}</p>
             <div class="stat">
@@ -936,7 +936,7 @@ app.get("/admin", (req, res) => {
 // Корневой маршрут
 app.get("/", (req, res) => {
   res.json({
-    name: "Telegram Wheel Game Backend",
+    name: "Telegram Spins Backend",
     version: "1.0.0",
     endpoints: ["/health", "/api/info", "/api/user/:userId"],
     websocket: "wss://" + req.get('host'),
