@@ -26,7 +26,7 @@ app.use(express.json());
 
 // Настройки игры
 const START_BALANCE = 1000;
-const ADMIN_IDS = ["1743237033"]; // Ваш Telegram ID
+const ADMIN_IDS = ["1743237033"]; 
 
 // Функции для работы с файлом пользователей (в разработке)
 function loadUsers() {
